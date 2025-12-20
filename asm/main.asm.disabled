@@ -1,0 +1,15 @@
+.logical $8000
+DBP .macro
+    .byte $02
+.endmacro
+START:
+    LDA #$FF
+    LDA #$FF
+    LDA #$FF
+    LDA #$FF
+    LDA #$FF
+    DBP
+    JMP START
+* = $FFFC
+.word START
+.endlogical
