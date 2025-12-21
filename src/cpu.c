@@ -16,43 +16,114 @@ void CPU_set_NZ(CPU* cpu, u8 result) {
  */
 
 /* CPU instruction functions */
-void _CPU_LDA_IMM(CPU* cpu) {
+
+void _CPU_branch_logic(CPU* cpu) {
     switch (cpu->cycle) {
-        case 1: {
-            cpu->r.A = cpu->read_fn(cpu->r.PC);
-            CPU_set_NZ(cpu, cpu->r.A);
-            cpu->r.PC++;
-            cpu->cycle = 0; // Cycle 0 means "fetch instruction"
+        case 1:
+            cpu->offset = (i8)cpu->read_fn(cpu->r.PC);
+            cpu->old_pc = ++cpu->r.PC;
+            cpu->cycle++;
             break;
-        }
-            default:{
+        case 2:
+            if ((bool)(cpu->r.P & branch_flag_by_index[(cpu->r.IR & 0xC0) >> 6]) ^ (bool)(cpu->r.IR & 0x40)) {
+                cpu->r.PC = cpu->r.PC + cpu->offset;
+                cpu->r.PC = (cpu->r.PC & 0xFF) + (cpu->old_pc & 0xFF00);
+                cpu->cycle = ((cpu->r.PC & 0xFF00) != (cpu->old_pc & 0xFF00)) ? cpu->cycle+1 : 0;
+            } else {
+                cpu->cycle = 0;
+            }
+            break;
+        case 3:
+            cpu->r.PC = (cpu->r.PC & 0xFF) + ((cpu->r.PC + cpu->offset) & 0xFF00);
             cpu->cycle = 0;
-            break; /* Do nothing, because the cycle is invalid */
-        }
+            break;
     }
 }
 
-void _CPU_LDA_ABS(CPU* cpu) {
+void _CPU_flags_logic(CPU* cpu) {
+    // Only possible cpu->cycle is 1
+    cpu->r.P &= ~(instruction_flag_by_index[(cpu->r.IR & 0xC0) >> 6]);
+    cpu->r.P |= (bool)(cpu->r.IR & 0x20) ? instruction_flag_by_index[(cpu->r.IR & 0xC0) >> 6] : 0;
+    cpu->cycle = 0;
+    /*cpu->r.PC++;*/ /* This does not do any memory accesses and as such the PC is already pointing to the next instruction */
+}
+
+void _CPU_addressing_ABS(CPU* cpu) {
     switch (cpu->cycle) {
         case 1: {
-            cpu->access_address = cpu->read_fn(cpu->r.PC);
-            cpu->r.PC++;
+            // Low byte first
+            cpu->access_address = cpu->read_fn(cpu->r.PC++);
             cpu->cycle++;
             break;
         }
         case 2: {
-            cpu->access_address |= cpu->read_fn(cpu->r.PC) << 8;
-            cpu->r.PC++;
+            // Next byte
+            cpu->access_address |= cpu->read_fn(cpu->r.PC++) << 8;
             cpu->cycle++;
+            break;
+        }
+    }
+}
+
+void _CPU_TAX(CPU* cpu) {
+    cpu->r.X = cpu->r.A;
+    CPU_set_NZ(cpu, cpu->r.X);
+    cpu->cycle = 0;
+}
+
+void _CPU_TXA(CPU* cpu) {
+    cpu->r.A = cpu->r.X;
+    CPU_set_NZ(cpu, cpu->r.A);
+    cpu->cycle = 0;
+}
+
+void _CPU_TAY(CPU* cpu) {
+    cpu->r.Y = cpu->r.A;
+    CPU_set_NZ(cpu, cpu->r.Y);
+    cpu->cycle = 0;
+}
+
+void _CPU_TYA(CPU* cpu) {
+    cpu->r.A = cpu->r.Y;
+    CPU_set_NZ(cpu, cpu->r.A);
+    cpu->cycle = 0;
+}
+
+void _CPU_LDA(CPU* cpu) {
+    switch (cpu->bb) {
+        case ADDR_IMM: {
+            goto LDA_ADDR_IMM;
+            break;
+        }
+        case ADDR_ABS: {
+            goto LDA_ADDR_ABS;
+            break;
+        }
+        default: {
+            return;
+        }
+    }
+    
+    LDA_ADDR_IMM:
+    cpu->r.A = cpu->read_fn(cpu->r.PC++);
+    CPU_set_NZ(cpu, cpu->r.A);
+    cpu->cycle = 0;
+    return;
+
+    LDA_ADDR_ABS:
+    switch (cpu->cycle) {
+        case 1:
+        case 2: {
+            _CPU_addressing_ABS(cpu); // This already increments cycle and the PC
             break;
         }
         case 3: {
             cpu->r.A = cpu->read_fn(cpu->access_address);
-            CPU_set_NZ(cpu, cpu->r.A);
             cpu->cycle = 0;
             break;
         }
     }
+    return;
 }
 
 void _CPU_STA_ABS(CPU* cpu) {
@@ -75,12 +146,6 @@ void _CPU_STA_ABS(CPU* cpu) {
             break;
         }
     }
-}
-
-void _CPU_TAX(CPU* cpu) {
-    cpu->r.X = cpu->r.A;
-    CPU_set_NZ(cpu, cpu->r.X);
-    cpu->cycle = 0;
 }
 
 void _CPU_CMP_logic(CPU* cpu, u8 cpu_register, u8 compare_operand) {
@@ -117,32 +182,6 @@ void _CPU_JMP_ABS(CPU* cpu) {
         }
         case 3: {
             cpu->r.PC = cpu->access_address;
-            cpu->cycle = 0;
-            break;
-        }
-    }
-}
-
-void _CPU_BEQ(CPU* cpu) {
-    switch (cpu->cycle) {
-        case 1: {
-            cpu->offset = (i8)cpu->read_fn(cpu->r.PC);
-            cpu->old_pc = ++cpu->r.PC;
-            cpu->cycle++;
-            break;
-        }
-        case 2: {
-            if (cpu->r.P & FLAGS_ZER) {
-                cpu->r.PC = cpu->r.PC + cpu->offset;
-                cpu->r.PC = (cpu->r.PC & 0xFF) + (cpu->old_pc & 0xFF00);
-                cpu->cycle = ((cpu->r.PC & 0xFF00) != (cpu->old_pc & 0xFF00)) ? cpu->cycle+1 : 0;
-            } else {
-                cpu->cycle = 0;
-            }
-            break;
-        }
-        case 3: {
-            cpu->r.PC = (cpu->r.PC & 0xFF) + ((cpu->r.PC + cpu->offset) & 0xFF00);
             cpu->cycle = 0;
             break;
         }
@@ -194,13 +233,12 @@ void CPU_emulate (CPU* cpu) {
         return;
     }
     
+    cpu->bb = (cpu->r.IR & 0b00011100) >> 2;
+
     switch (cpu->r.IR) {
-        case 0xA9: { // LDA #
-            _CPU_LDA_IMM(cpu);
-            break;
-        }
+        case 0xA9:   // LDA #
         case 0xAD: { // LDA abs
-            _CPU_LDA_ABS(cpu);
+            _CPU_LDA(cpu);
             break;
         }
         case 0x8D: { // STA abs
@@ -219,10 +257,26 @@ void CPU_emulate (CPU* cpu) {
             _CPU_JMP_ABS(cpu);
             break;
         }
+        case 0x10:   // BPL rel
+        case 0x30:   // BMI rel
+        case 0x50:   // BVC rel
+        case 0x70:   // BVS rel
+        case 0x90:   // BCC rel
+        case 0xB0:   // BCS rel
+        case 0xD0:   // BNE rel
         case 0xF0: { // BEQ rel
-            _CPU_BEQ(cpu);
+            _CPU_branch_logic(cpu);
             break;
         }
+        case 0x18: // CLC impl
+        case 0x38: // SEC impl
+        case 0x58: // CLI impl
+        case 0x78: // SEI impl
+        case 0xB8: // CLV impl /* note: there is no SEV, it's a pin, SOB */
+        case 0xD8: // CLD impl
+        case 0xF8: // SED impl
+            _CPU_flags_logic(cpu);
+            break;
         case 0x02: { // DBP (debug print)
             printf("A=%02X   X=%02X    Y=%02X    P=%08B    IR=%02X    SP=%02X    PC=%04X    IC=%08X\n", \
                    cpu->r.A, cpu->r.X, cpu->r.Y, cpu->r.P, cpu->r.IR, cpu->r.SP, cpu->r.PC, cpu->instruction_count);

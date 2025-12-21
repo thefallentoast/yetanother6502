@@ -23,7 +23,7 @@ TARGET     := $(BIN_PATH)/ya6502$(EXE)
 CFLAGS   := -Wall -Wextra -O3 -I$(INCLUDE_PATH) -std=c2x
 ASMFLAGS := --flat -Wall --mw65c02
 
-run: clean $(TARGET) assemble
+run: $(TARGET) assemble
 ifeq ($(EXE),)
 	$(TARGET) sample.bin
 else

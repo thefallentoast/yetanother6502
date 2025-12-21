@@ -2,21 +2,13 @@
 DBP .macro
     .byte $02
 .endmacro
-YES:
-    LDA #$AA
-    DBP
-    CMP #$AA
-    BEQ FINALLY
 START:
-    LDA #$D4
-    CMP #$D3
-    BEQ YES
     LDA #$FF
     DBP
-    CMP #$FF
-    BEQ FINALLY
-FINALLY:
-    LDA #$EE
+    STA $0100
+    LDA #$00
+    DBP
+    LDA $0100
     DBP
     BRK
 * = $FFFC

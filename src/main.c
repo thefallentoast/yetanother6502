@@ -1,4 +1,3 @@
-#include "constants.h"
 #include "cpu.h"
 
 FILE *romFile = NULL;
