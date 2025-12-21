@@ -41,7 +41,7 @@ int main(int argc, char** argv) {
     while (cpu.is_running) {
         CPU_emulate(&cpu);
         sleep_ms(1);
-        printf("A=%02X   X=%02X    Y=%02X    P=%08B    IR=%02X    SP=%02X    PC=%04X    IC=%08X\n", \
+        //printf("A=%02X   X=%02X    Y=%02X    P=%08B    IR=%02X    SP=%02X    PC=%04X    IC=%08X\n", \
                 cpu.r.A, cpu.r.X,  cpu.r.Y,  cpu.r.P,  cpu.r.IR,  cpu.r.SP,  cpu.r.PC,  cpu.instruction_count);
         //sleep(1);
     }

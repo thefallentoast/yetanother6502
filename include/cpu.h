@@ -15,11 +15,12 @@ typedef struct CPU_s {
     u32 instruction_count;
 
     /* INTERNAL */
+    i8  offset;
     u8  reset_delay;
     u8  compare_operand;
     u16 access_address;
     u16 indirect_address;
-    u16 new_pc;
+    u16 old_pc;
 } CPU;
 
 /* External functions */

@@ -126,22 +126,25 @@ void _CPU_JMP_ABS(CPU* cpu) {
 void _CPU_BEQ(CPU* cpu) {
     switch (cpu->cycle) {
         case 1: {
-            cpu->new_pc = cpu->r.PC + (i8)cpu->read_fn(cpu->r.PC);
-            cpu->r.PC++;
+            cpu->offset = (i8)cpu->read_fn(cpu->r.PC);
+            cpu->old_pc = ++cpu->r.PC;
             cpu->cycle++;
             break;
         }
         case 2: {
             if (cpu->r.P & FLAGS_ZER) {
-                cpu->r.PC = (cpu->r.PC & 0xFF00) | (cpu->new_pc & 0xFF);
-                // TODO
+                cpu->r.PC = cpu->r.PC + cpu->offset;
+                cpu->r.PC = (cpu->r.PC & 0xFF) + (cpu->old_pc & 0xFF00);
+                cpu->cycle = ((cpu->r.PC & 0xFF00) != (cpu->old_pc & 0xFF00)) ? cpu->cycle+1 : 0;
             } else {
                 cpu->cycle = 0;
             }
             break;
         }
         case 3: {
-            cpu->r.PC += ((cpu->new_pc > cpu->r.PC) ? (i16)1 : (i16)-0x100); // Fix the top byte
+            cpu->r.PC = (cpu->r.PC & 0xFF) + ((cpu->r.PC + cpu->offset) & 0xFF00);
+            cpu->cycle = 0;
+            break;
         }
     }
 }
@@ -214,6 +217,10 @@ void CPU_emulate (CPU* cpu) {
         }
         case 0x4C: { // JMP abs
             _CPU_JMP_ABS(cpu);
+            break;
+        }
+        case 0xF0: { // BEQ rel
+            _CPU_BEQ(cpu);
             break;
         }
         case 0x02: { // DBP (debug print)
