@@ -1,4 +1,5 @@
 #include "cpu.h"
+#define _EMULATE_W65C02S
 
 /* Flag modifying functions */
 /* Sets NZ to appropriate values following a result*/
@@ -141,7 +142,7 @@ void _CPU_LDA(CPU* cpu) {
                 _CPU_addressing_ZPG(cpu); break;
             }
             case ADDR_IMM: {
-                _CPU_addressing_IMM(cpu); goto LOAD_LOGIC; /* IMM is the only one that doesn't do any memory accesses 
+                _CPU_addressing_IMM(cpu); goto LDA_LOGIC; /* IMM is the only one that doesn't do any memory accesses 
                                                             * and as such happens in 2 cycles (fetch opcode + fetch operand), 
                                                             * instead of >3 (fetch opcode + 1 or 2 fetch address + 1 to 3 fetch 
                                                             * operand in memory) */
@@ -152,53 +153,38 @@ void _CPU_LDA(CPU* cpu) {
         }
         return;
     }
-    LOAD_LOGIC:
-    CPU_set_NZ(cpu, cpu->r.A = cpu->read_fn(cpu->access_address));
-    cpu->cycle = 0;
+    LDA_LOGIC:
+        CPU_set_NZ(cpu, cpu->r.A = cpu->read_fn(cpu->access_address));
+        cpu->cycle = 0;
 }
 
 void _CPU_STA(CPU* cpu) {
-    switch (cpu->bbb) {
-        case ADDR_IMM: {
-            // STA does not have an # addressing mode, so it's a 2-byte NOP.
-            cpu->r.PC++;
-            cpu->cycle = 0;
-            return;
+    if (!cpu->found_address) {
+        switch (cpu->bbb) {
+            case ADDR_X_IND: {
+                _CPU_addressing_X_IND(cpu); break;
+            }
+            case ADDR_ZPG: {
+                _CPU_addressing_ZPG(cpu); break;
+            }
+            case ADDR_IMM: {
+                // STA does not have an # addressing mode, so it's a 2-byte NOP.
+                cpu->r.PC++;
+                cpu->cycle = 0;
+                return;
+            }
+            case ADDR_ABS: {
+                _CPU_addressing_ABS(cpu); break;
+            }
+            default: {
+                // Simply return
+                return;
+            }
         }
-        case ADDR_X_IND: {
-            goto STA_ADDR_X_IND;
-        }
-        case ADDR_ABS: {
-            goto STA_ADDR_ABS;
-        }
-        default: {
-            // Simply return
-            return;
-        }
+        return;
     }
-
-    STA_ADDR_X_IND:
-    switch (cpu->cycle) {
-        case 1:
-        case 2:
-        case 3:
-        case 4: {
-            _CPU_addressing_X_IND(cpu);
-        }
-    }
-
-    STA_ADDR_ABS:
-    switch (cpu->cycle) {
-        case 1:
-        case 2:
-            _CPU_addressing_ABS(cpu);
-            break;
-        case 3:
-            cpu->write_fn(cpu->access_address, cpu->r.A);
-            cpu->cycle = 0;
-            break;
-    }
-    return;
+    cpu->write_fn(cpu->access_address, cpu->r.A);
+    cpu->cycle = 0;
 }
 
 void _CPU_CMP_logic(CPU* cpu, u8 cpu_register, u8 compare_operand) {
@@ -239,6 +225,44 @@ void _CPU_JMP_ABS(CPU* cpu) {
             break;
         }
     }
+}
+
+void _CPU_JMP_IND(CPU* cpu) {
+    #ifdef _EMULATE_W65C02S
+    switch (cpu->cycle) {
+        case 1: {
+            cpu->indirect_address = cpu->read_fn(cpu->r.PC);
+            cpu->old_pc = cpu->r.PC++;
+            cpu->cycle++;
+            break;
+        }
+        case 2: {
+            cpu->r.PC = cpu->r.PC + cpu->offset;
+            cpu->r.PC = (cpu->r.PC & 0xFF) + (cpu->old_pc & 0xFF00);
+            cpu->indirect_address |= cpu->read_fn(cpu->old_pc) << 8;
+            
+            
+            cpu->cycle = ((cpu->old_pc & 0xFF00) == (cpu->r.PC & 0xFF00)) ? 4 : 3;
+            break;
+        }
+        case 3: {
+            cpu->indirect_address += 1 << 8; // Fix the upper byte
+            cpu->cycle++;
+            break;
+        }
+        case 4: {
+            cpu->access_address = cpu->read_fn(cpu->r.PC++);
+            cpu->cycle++;
+            break;
+        }
+        case 5: {
+            cpu->access_address |= cpu->read_fn(cpu->r.PC++) << 8;
+            cpu->r.PC = cpu->access_address;
+            cpu->cycle = 0;
+        }
+    }
+    #else
+    #endif
 }
 
 void CPU_reset (CPU* cpu, read_fn_ptr read_fn, write_fn_ptr write_fn) {
@@ -283,6 +307,7 @@ void CPU_emulate (CPU* cpu) {
         cpu->r.PC++;
         cpu->cycle++;
         cpu->instruction_count++;
+        cpu->found_address = false;
 
         // Compute octal triplet
         cpu->aaa = (cpu->r.IR & 0b11100000) >> 5;
