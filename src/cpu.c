@@ -48,6 +48,13 @@ void _CPU_flags_logic(CPU* cpu) {
     /*cpu->r.PC++;*/ /* This does not do any memory accesses and as such the PC is already pointing to the next instruction */
 }
 
+void _CPU_addressing_IMM(CPU* cpu) {
+    // Imm is the simplest.
+    cpu->access_address = cpu->r.PC++;
+    cpu->found_address = true;
+    cpu->cycle++;
+}
+
 void _CPU_addressing_ABS(CPU* cpu) {
     switch (cpu->cycle) {
         case 1: {
@@ -60,6 +67,41 @@ void _CPU_addressing_ABS(CPU* cpu) {
             // Next byte
             cpu->access_address |= cpu->read_fn(cpu->r.PC++) << 8;
             cpu->cycle++;
+            cpu->found_address = true;
+            break;
+        }
+    }
+}
+
+void _CPU_addressing_ZPG(CPU* cpu) {
+    // Only possible CPU cycle is 1
+    // Low byte first
+    cpu->access_address = cpu->read_fn(cpu->r.PC++);
+    cpu->cycle++;
+    cpu->found_address = true;
+}
+
+void _CPU_addressing_X_IND(CPU* cpu) { // (ZPG,X)
+    switch (cpu->cycle) {
+        case 1: {
+            cpu->indirect_address = cpu->read_fn(cpu->r.PC++);
+            cpu->cycle++;
+            break;
+        }
+        case 2: {
+            cpu->indirect_address = (u8)(cpu->indirect_address + cpu->r.X);
+            cpu->cycle++;
+            break;
+        }
+        case 3: {
+            cpu->access_address = cpu->read_fn(cpu->indirect_address); cpu->indirect_address = (u8)(cpu->indirect_address + 1);
+            cpu->cycle++;
+            break;
+        }
+        case 4: {
+            cpu->access_address |= cpu->read_fn(cpu->indirect_address) << 8;
+            cpu->cycle++;
+            cpu->found_address = true;
             break;
         }
     }
@@ -90,62 +132,73 @@ void _CPU_TYA(CPU* cpu) {
 }
 
 void _CPU_LDA(CPU* cpu) {
-    switch (cpu->bb) {
+    if (!cpu->found_address) {
+        switch (cpu->bbb) {
+            case ADDR_X_IND: {
+                _CPU_addressing_X_IND(cpu); break;
+            }
+            case ADDR_ZPG: {
+                _CPU_addressing_ZPG(cpu); break;
+            }
+            case ADDR_IMM: {
+                _CPU_addressing_IMM(cpu); goto LOAD_LOGIC; /* IMM is the only one that doesn't do any memory accesses 
+                                                            * and as such happens in 2 cycles (fetch opcode + fetch operand), 
+                                                            * instead of >3 (fetch opcode + 1 or 2 fetch address + 1 to 3 fetch 
+                                                            * operand in memory) */
+            }
+            case ADDR_ABS: {
+                _CPU_addressing_ABS(cpu); break;
+            }
+        }
+        return;
+    }
+    LOAD_LOGIC:
+    CPU_set_NZ(cpu, cpu->r.A = cpu->read_fn(cpu->access_address));
+    cpu->cycle = 0;
+}
+
+void _CPU_STA(CPU* cpu) {
+    switch (cpu->bbb) {
         case ADDR_IMM: {
-            goto LDA_ADDR_IMM;
-            break;
+            // STA does not have an # addressing mode, so it's a 2-byte NOP.
+            cpu->r.PC++;
+            cpu->cycle = 0;
+            return;
+        }
+        case ADDR_X_IND: {
+            goto STA_ADDR_X_IND;
         }
         case ADDR_ABS: {
-            goto LDA_ADDR_ABS;
-            break;
+            goto STA_ADDR_ABS;
         }
         default: {
+            // Simply return
             return;
         }
     }
-    
-    LDA_ADDR_IMM:
-    cpu->r.A = cpu->read_fn(cpu->r.PC++);
-    CPU_set_NZ(cpu, cpu->r.A);
-    cpu->cycle = 0;
-    return;
 
-    LDA_ADDR_ABS:
+    STA_ADDR_X_IND:
     switch (cpu->cycle) {
         case 1:
-        case 2: {
-            _CPU_addressing_ABS(cpu); // This already increments cycle and the PC
-            break;
-        }
-        case 3: {
-            cpu->r.A = cpu->read_fn(cpu->access_address);
-            cpu->cycle = 0;
-            break;
+        case 2:
+        case 3:
+        case 4: {
+            _CPU_addressing_X_IND(cpu);
         }
     }
-    return;
-}
 
-void _CPU_STA_ABS(CPU* cpu) {
+    STA_ADDR_ABS:
     switch (cpu->cycle) {
-        case 1: {
-            cpu->access_address = cpu->read_fn(cpu->r.PC); // Load low byte
-            cpu->r.PC++;
-            cpu->cycle++;
+        case 1:
+        case 2:
+            _CPU_addressing_ABS(cpu);
             break;
-        }
-        case 2: {
-            cpu->access_address |= cpu->read_fn(cpu->r.PC) << 8;
-            cpu->r.PC++;
-            cpu->cycle++;
-            break;
-        }
-        case 3: {
+        case 3:
             cpu->write_fn(cpu->access_address, cpu->r.A);
             cpu->cycle = 0;
             break;
-        }
     }
+    return;
 }
 
 void _CPU_CMP_logic(CPU* cpu, u8 cpu_register, u8 compare_operand) {
@@ -230,21 +283,31 @@ void CPU_emulate (CPU* cpu) {
         cpu->r.PC++;
         cpu->cycle++;
         cpu->instruction_count++;
+
+        // Compute octal triplet
+        cpu->aaa = (cpu->r.IR & 0b11100000) >> 5;
+        cpu->bbb = (cpu->r.IR & 0b00011100) >> 2;
+        cpu->cc  = (cpu->r.IR & 0b00000011);
+
         return;
     }
-    
-    cpu->bb = (cpu->r.IR & 0b00011100) >> 2;
+
+    if (cpu->cc == 1) {
+        // Instructions involving the accumulator.
+        switch (cpu->aaa) {
+            case 4: {
+                _CPU_STA(cpu);
+                break;
+            }
+            case 5: {
+                _CPU_LDA(cpu);
+                break;
+            }
+        }
+        return;
+    }
 
     switch (cpu->r.IR) {
-        case 0xA9:   // LDA #
-        case 0xAD: { // LDA abs
-            _CPU_LDA(cpu);
-            break;
-        }
-        case 0x8D: { // STA abs
-            _CPU_STA_ABS(cpu);
-            break;
-        }
         case 0xAA: { // TAX impl
             _CPU_TAX(cpu);
             break;

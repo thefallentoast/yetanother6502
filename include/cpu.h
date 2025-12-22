@@ -39,16 +39,17 @@ typedef struct CPU_s {
     u32 instruction_count;
 
     /* INTERNAL */
-    i8  offset;
-    u8  reset_delay;
-    u8  compare_operand;
-    u16 access_address;
-    u16 indirect_address;
-    u16 old_pc;
+    i8   offset;
+    u8   reset_delay;
+    u8   compare_operand;
+    u16  access_address;
+    u16  indirect_address;
+    u16  old_pc;
+    bool found_address;
 
     u8 aaa;
-    u8 bb;
-    u8 ccc;
+    u8 bbb;
+    u8 cc;
 } CPU;
 
 typedef enum FLAGS_e : u8 {
