@@ -2,13 +2,12 @@
 DBP .macro
     .byte $02
 .endmacro
+*=$8000
 START:
-    LDA #$FF
-    DBP
-    STA $0100
-    LDA #$00
-    DBP
-    LDA $0100
+    SEI
+    SED
+    PHP
+    PLA
     DBP
     BRK
 * = $FFFC

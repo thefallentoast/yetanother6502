@@ -16,7 +16,13 @@ void CPU_set_NZ(CPU* cpu, u8 result) {
  * gives us the sign bit at the proper position already.
  */
 
-/* CPU instruction functions */
+void _CPU_push_to_stack(CPU* cpu, u8 value) {
+    cpu->write_fn(0x100 + cpu->r.SP--, value);
+}
+
+u8 _CPU_pull_from_stack(CPU* cpu) {
+    return cpu->read_fn(0x100 + ++cpu->r.SP);
+}
 
 void _CPU_branch_logic(CPU* cpu) {
     switch (cpu->cycle) {
@@ -108,6 +114,32 @@ void _CPU_addressing_X_IND(CPU* cpu) { // (ZPG,X)
     }
 }
 
+void _CPU_stack_manipulation(CPU* cpu) {
+    // Very simple
+    switch((cpu->r.IR & 0x60) >> 5) {
+        case 0: { // Push P
+            _CPU_push_to_stack(cpu, cpu->r.P | FLAGS_BRK);
+            break;
+        }
+        case 1: { // Pull P
+            cpu->r.P = _CPU_pull_from_stack(cpu) & ~FLAGS_BRK;
+            break;    
+        }
+        case 2: { // Push A
+            _CPU_push_to_stack(cpu, cpu->r.A);
+            break;
+        }
+        case 3: { // Pull A
+            cpu->r.A = _CPU_pull_from_stack(cpu);
+            break;
+        }
+        #ifdef _EMULATE_W65C02S
+            // TODO: add the PHX/PLX/PHY/PLY
+        #endif
+    }
+    cpu->cycle = 0;
+}
+
 void _CPU_TAX(CPU* cpu) {
     cpu->r.X = cpu->r.A;
     CPU_set_NZ(cpu, cpu->r.X);
@@ -193,16 +225,31 @@ void _CPU_CMP_logic(CPU* cpu, u8 cpu_register, u8 compare_operand) {
     cpu->r.P |= (temp == 0 ? FLAGS_ZER : 0) | (cpu_register >= compare_operand ? FLAGS_CAR : 0) | (temp & FLAGS_NEG);
 }
 
-void _CPU_CMP_IMM(CPU* cpu) {
-    switch (cpu->cycle) {
-        case 1: {
-            cpu->compare_operand = cpu->read_fn(cpu->r.PC);
-            cpu->r.PC++;
-            _CPU_CMP_logic(cpu, cpu->r.A, cpu->compare_operand);
-            cpu->cycle = 0;
-            break;
+void _CPU_CMP(CPU* cpu) {
+    if (!cpu->found_address) {
+        switch (cpu->bbb) {
+            case ADDR_X_IND: {
+                _CPU_addressing_X_IND(cpu); break;
+            }
+            case ADDR_ZPG: {
+                _CPU_addressing_ZPG(cpu); break;
+            }
+            case ADDR_IMM: {
+                _CPU_addressing_IMM(cpu); goto CMP_LOGIC; /* IMM is the only one that doesn't do any memory accesses 
+                                                            * and as such happens in 2 cycles (fetch opcode + fetch operand), 
+                                                            * instead of >3 (fetch opcode + 1 or 2 fetch address + 1 to 3 fetch 
+                                                            * operand in memory) */
+            }
+            case ADDR_ABS: {
+                _CPU_addressing_ABS(cpu); break;
+            }
         }
+        return;
     }
+    CMP_LOGIC:
+        _CPU_CMP_logic(cpu, cpu->r.A, cpu->read_fn(cpu->access_address));
+        cpu->cycle = 0;
+        return;
 }
 
 void _CPU_JMP_ABS(CPU* cpu) {
@@ -231,32 +278,35 @@ void _CPU_JMP_IND(CPU* cpu) {
     #ifdef _EMULATE_W65C02S
     switch (cpu->cycle) {
         case 1: {
-            cpu->indirect_address = cpu->read_fn(cpu->r.PC);
+            cpu->indirect_address = cpu->read_fn(cpu->r.PC); // Low byte
             cpu->old_pc = cpu->r.PC++;
             cpu->cycle++;
             break;
         }
         case 2: {
-            cpu->r.PC = cpu->r.PC + cpu->offset;
-            cpu->r.PC = (cpu->r.PC & 0xFF) + (cpu->old_pc & 0xFF00);
-            cpu->indirect_address |= cpu->read_fn(cpu->old_pc) << 8;
-            
-            
-            cpu->cycle = ((cpu->old_pc & 0xFF00) == (cpu->r.PC & 0xFF00)) ? 4 : 3;
+            if ((cpu->old_pc & 0xFF) == 0xFF) {
+                // Page boundary will be crossed
+                cpu->cycle = 3;
+                break;
+            }
+            // Else, simply get the next byte and skip
+            cpu->indirect_address |= cpu->read_fn(cpu->r.PC++) << 8;
+            cpu->cycle = 4;
             break;
         }
         case 3: {
-            cpu->indirect_address += 1 << 8; // Fix the upper byte
+            // Page boundary was crossed.
+            cpu->indirect_address |= cpu->read_fn(cpu->r.PC++) << 8; // We have to "fake" the addition in order to maintain cycle accuracy
             cpu->cycle++;
             break;
         }
         case 4: {
-            cpu->access_address = cpu->read_fn(cpu->r.PC++);
+            cpu->access_address = cpu->read_fn(cpu->indirect_address++);
             cpu->cycle++;
             break;
         }
         case 5: {
-            cpu->access_address |= cpu->read_fn(cpu->r.PC++) << 8;
+            cpu->access_address |= cpu->read_fn(cpu->indirect_address) << 8;
             cpu->r.PC = cpu->access_address;
             cpu->cycle = 0;
         }
@@ -273,7 +323,7 @@ void CPU_reset (CPU* cpu, read_fn_ptr read_fn, write_fn_ptr write_fn) {
     if (write_fn != NULL) {
         cpu->write_fn = write_fn;
     }
-    cpu->r.PC = 0xFFFC;
+    cpu->r.PC = 0xFFFC; cpu->r.SP = 0xEA; // It should be a random value, so I chose $EA "randomly"
     cpu->r.P = FLAGS_IGN;
     cpu->reset_delay = 7;
     cpu->is_running = true;
@@ -328,21 +378,25 @@ void CPU_emulate (CPU* cpu) {
                 _CPU_LDA(cpu);
                 break;
             }
+            case 6: {
+                _CPU_CMP(cpu);
+                break;
+            }
         }
         return;
     }
-
+    
     switch (cpu->r.IR) {
         case 0xAA: { // TAX impl
             _CPU_TAX(cpu);
             break;
         }
-        case 0xC9: { // CMP #
-            _CPU_CMP_IMM(cpu);
-            break;
-        }
         case 0x4C: { // JMP abs
             _CPU_JMP_ABS(cpu);
+            break;
+        }
+        case 0x6C: { // JMP ind
+            _CPU_JMP_IND(cpu);
             break;
         }
         case 0x10:   // BPL rel
@@ -365,6 +419,17 @@ void CPU_emulate (CPU* cpu) {
         case 0xF8: // SED impl
             _CPU_flags_logic(cpu);
             break;
+        case 0x08: // PHP impl
+        case 0x28: // PLP impl
+        case 0x48: // PHA impl
+        case 0x68: // PLA impl
+            _CPU_stack_manipulation(cpu);
+            break;
+        case 0xEA: { // NOP impl
+            // We must do nothing for 1+1 cycles (fetch opcode + do nothing)
+            cpu->cycle = 0;
+            break;
+        }
         case 0x02: { // DBP (debug print)
             printf("A=%02X   X=%02X    Y=%02X    P=%08B    IR=%02X    SP=%02X    PC=%04X    IC=%08X\n", \
                    cpu->r.A, cpu->r.X, cpu->r.Y, cpu->r.P, cpu->r.IR, cpu->r.SP, cpu->r.PC, cpu->instruction_count);
