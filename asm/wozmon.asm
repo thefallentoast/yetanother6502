@@ -31,7 +31,7 @@ ESCAPE:
                 JSR     ECHO           ; Output it.
 
 GETLINE:
-                LDA     #$0D           ; Send CR
+                LDA     #$0A           ; Send LF
                 JSR     ECHO
 
                 LDY     #$01           ; Initialize text index.
@@ -45,7 +45,7 @@ NEXTCHAR:
                 LDA     ACIA_DATA      ; Load character. B7 will be '0'.
                 STA     IN,Y           ; Add to text buffer.
                 JSR     ECHO           ; Display character.
-                CMP     #$0D           ; CR?
+                CMP     #$0A           ; CR?
                 BNE     NOTCR          ; No.
 
                 LDY     #$FF           ; Reset text index.
@@ -60,7 +60,7 @@ BLSKIP:
                 INY                    ; Advance text index.
 NEXTITEM:
                 LDA     IN,Y           ; Get character.
-                CMP     #$0D           ; CR?
+                CMP     #$0A           ; LF?
                 BEQ     GETLINE        ; Yes, done this line.
                 CMP     #$2E           ; "."?
                 BCC     BLSKIP         ; Skip delimiter.
@@ -126,7 +126,7 @@ SETADR:         LDA     L-1,X          ; Copy hex data to
 
 NXTPRNT:
                 BNE     PRDATA         ; NE means no address to print.
-                LDA     #$0D           ; CR.
+                LDA     #$0A           ; LF.
                 JSR     ECHO           ; Output it.
                 LDA     XAMH           ; 'Examine index' high-order byte.
                 JSR     PRBYTE         ; Output it in hex format.
@@ -173,12 +173,12 @@ PRHEX:
                 ADC     #$06           ; Add offset for letter.
 
 ECHO:
-                PHA                    ; Save A.
+                ;PHA                    ; Save A.
                 STA     ACIA_DATA      ; Output character.
-                LDA     #$FF           ; Initialize delay loop.
-TXDELAY:        DEC     A              ; Decrement A.
-                BNE     TXDELAY        ; Until A gets to 0.
-                PLA                    ; Restore A.
+                ;LDA     #$FF           ; Initialize delay loop.
+TXDELAY:        ;DEC     A              ; Decrement A.
+                ;BNE     TXDELAY        ; Until A gets to 0.
+                ;PLA                    ; Restore A.
                 RTS                    ; Return.
 
   * = $FFFA
